@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage(Defaults.showOverlay) private var showOverlay = true
     @AppStorage(Defaults.autoInsert) private var autoInsert = true
     @AppStorage(Defaults.launchAtLogin) private var launchAtLogin = false
+    @AppStorage(Defaults.enginePreference) private var enginePreference = EnginePreference.auto.rawValue
 
     var body: some View {
         TabView {
@@ -17,12 +18,30 @@ struct SettingsView: View {
                 .tabItem { Label("Audio", systemImage: "mic") }
         }
         .padding(20)
-        .frame(width: 460, height: 340)
+        .frame(width: 460, height: 380)
     }
 
     @ViewBuilder
     private var generalTab: some View {
         Form {
+            Section("Engine") {
+                Picker("Transcription engine", selection: $enginePreference) {
+                    Text("Auto (Recommended)").tag(EnginePreference.auto.rawValue)
+                    Text("Apple Speech").tag(EnginePreference.apple.rawValue)
+                    if appState.isWhisperKitAvailable {
+                        Text("WhisperKit").tag(EnginePreference.whisperKit.rawValue)
+                    }
+                }
+
+                if !appState.activeEngineName.isEmpty {
+                    HStack {
+                        Text("Active engine:")
+                        Text(appState.activeEngineName)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Transcription") {
                 Picker("Language", selection: $appState.selectedLocale) {
                     Text("System Default (\(Locale.current.localizedString(forIdentifier: Locale.current.identifier) ?? "Unknown"))")

@@ -6,7 +6,11 @@ import OSLog
 final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
     private var analyzer: SpeechAnalyzer?
     private var transcriber: DictationTranscriber?
+    private var detector: SpeechDetector?
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
+
+    var silenceTimeoutSeconds: TimeInterval = 30
+    var onSpeechDetection: ((Bool) -> Void)?
 
     var isAvailable: Bool {
         get async { true }
@@ -14,6 +18,19 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
 
     var supportedLocales: [Locale] {
         get async { await DictationTranscriber.supportedLocales }
+    }
+
+    func prepareModel(for locale: Locale) async {
+        let transcriber = DictationTranscriber(
+            locale: locale,
+            preset: .progressiveShortDictation
+        )
+        do {
+            try await ensureModelAvailable(for: transcriber)
+            Logger.transcription.info("Apple speech model pre-warmed for \(locale.identifier)")
+        } catch {
+            Logger.transcription.error("Pre-warm failed: \(error)")
+        }
     }
 
     func startTranscription(
@@ -26,6 +43,9 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
         )
         self.transcriber = transcriber
 
+        let detector = SpeechDetector()
+        self.detector = detector
+
         let (inputStream, inputCont) = AsyncStream<AnalyzerInput>.makeStream()
         self.inputContinuation = inputCont
 
@@ -33,7 +53,7 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
             priority: .userInitiated,
             modelRetention: .whileInUse
         )
-        let analyzer = SpeechAnalyzer(modules: [transcriber], options: options)
+        let analyzer = SpeechAnalyzer(modules: [transcriber, detector], options: options)
         self.analyzer = analyzer
 
         startForwardingAudio(from: audioStream, to: inputCont)
@@ -45,18 +65,38 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
                     try await engine.ensureModelAvailable(for: transcriber)
                     try await analyzer.start(inputSequence: inputStream)
 
-                    for try await result in transcriber.results {
-                        let text = String(result.text.characters)
-                        continuation.yield(TranscriptionResult(
-                            text: text,
-                            isFinal: result.isFinal,
-                            timeRange: result.range
-                        ))
-                    }
+                    await withTaskGroup(of: Void.self) { group in
+                        group.addTask {
+                            await engine.monitorSpeechDetection(detector: detector)
+                        }
 
-                    continuation.finish()
+                        group.addTask {
+                            do {
+                                var lastResultTime = Date()
+
+                                for try await result in transcriber.results {
+                                    lastResultTime = Date()
+                                    let text = String(result.text.characters)
+                                    continuation.yield(TranscriptionResult(
+                                        text: text,
+                                        isFinal: result.isFinal,
+                                        timeRange: result.range
+                                    ))
+                                }
+
+                                _ = lastResultTime
+                                continuation.finish()
+                            } catch {
+                                Logger.transcription.error("Transcription error: \(error)")
+                                continuation.finish(throwing: error)
+                            }
+                        }
+
+                        await group.next()
+                        group.cancelAll()
+                    }
                 } catch {
-                    Logger.transcription.error("Transcription error: \(error)")
+                    Logger.transcription.error("Analyzer start error: \(error)")
                     continuation.finish(throwing: error)
                 }
             }
@@ -78,6 +118,17 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
         }
         analyzer = nil
         transcriber = nil
+        detector = nil
+    }
+
+    private func monitorSpeechDetection(detector: SpeechDetector) async {
+        do {
+            for try await result in detector.results {
+                onSpeechDetection?(result.speechDetected)
+            }
+        } catch {
+            Logger.transcription.debug("Speech detection ended: \(error)")
+        }
     }
 
     private nonisolated func startForwardingAudio(
@@ -115,12 +166,16 @@ enum TranscriptionError: LocalizedError {
     case localeNotSupported
     case engineUnavailable
     case permissionDenied
+    case audioDeviceNotFound
+    case engineFailed(underlying: Error)
 
     var errorDescription: String? {
         switch self {
-        case .localeNotSupported: "The selected language is not supported."
-        case .engineUnavailable: "The transcription engine is not available."
+        case .localeNotSupported: "The selected language is not supported by this engine."
+        case .engineUnavailable: "No transcription engine is available."
         case .permissionDenied: "Speech recognition permission was denied."
+        case .audioDeviceNotFound: "The selected audio device could not be found."
+        case .engineFailed(let error): "Transcription failed: \(error.localizedDescription)"
         }
     }
 }

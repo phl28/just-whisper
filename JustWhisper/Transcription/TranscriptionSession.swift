@@ -7,24 +7,29 @@ final class TranscriptionSession {
     private let engine: any TranscriptionEngine
     private let textInserter: TextInsertionService?
     private let locale: Locale
+    private let silenceTimeout: TimeInterval
 
     private var transcriptionTask: Task<Void, Never>?
+    private var silenceTask: Task<Void, Never>?
     private(set) var finalizedText = ""
     private(set) var volatileText = ""
     private(set) var isRunning = false
 
     var onUpdate: ((String, String) -> Void)?
+    var onSilenceTimeout: (() -> Void)?
 
     init(
         audioService: AudioCaptureService,
         engine: any TranscriptionEngine,
         textInserter: TextInsertionService?,
-        locale: Locale
+        locale: Locale,
+        silenceTimeout: TimeInterval = 30
     ) {
         self.audioService = audioService
         self.engine = engine
         self.textInserter = textInserter
         self.locale = locale
+        self.silenceTimeout = silenceTimeout
     }
 
     func start() async throws {
@@ -45,11 +50,30 @@ final class TranscriptionSession {
             locale: locale
         )
 
+        var lastResultTime = Date()
+
+        if silenceTimeout > 0 {
+            silenceTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard let self, self.isRunning else { break }
+
+                    if Date().timeIntervalSince(lastResultTime) >= self.silenceTimeout {
+                        Logger.transcription.info("Silence timeout reached (\(self.silenceTimeout)s)")
+                        self.onSilenceTimeout?()
+                        break
+                    }
+                }
+            }
+        }
+
         transcriptionTask = Task {
             var lastInsertedLength = 0
 
             do {
                 for try await result in resultStream {
+                    lastResultTime = Date()
+
                     if result.isFinal {
                         finalizedText += result.text
                         volatileText = ""
@@ -84,6 +108,8 @@ final class TranscriptionSession {
             await engine.stopTranscription()
         }
 
+        silenceTask?.cancel()
+        silenceTask = nil
         transcriptionTask?.cancel()
         transcriptionTask = nil
         isRunning = false

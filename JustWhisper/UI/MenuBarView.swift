@@ -70,9 +70,16 @@ struct MenuBarView: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
-            Text(statusLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(statusLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !appState.activeEngineName.isEmpty && appState.isTranscribing {
+                    Text(appState.activeEngineName)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
     }
 

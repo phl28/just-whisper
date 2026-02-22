@@ -15,6 +15,12 @@ struct TranscriptionOverlayView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 }
+
+                if !appState.activeEngineName.isEmpty {
+                    Text(appState.activeEngineName)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -36,7 +42,7 @@ struct TranscriptionOverlayView: View {
     @ViewBuilder
     private var recordingIndicator: some View {
         Circle()
-            .fill(appState.isTranscribing ? Color.red : Color.gray)
+            .fill(indicatorColor)
             .frame(width: 10, height: 10)
             .opacity(appState.isTranscribing ? 1 : 0.5)
             .animation(
@@ -45,6 +51,13 @@ struct TranscriptionOverlayView: View {
                     : .default,
                 value: appState.isTranscribing
             )
+    }
+
+    private var indicatorColor: Color {
+        if !appState.isTranscribing {
+            return .gray
+        }
+        return appState.isSpeechDetected ? .red : .orange
     }
 
     @ViewBuilder
