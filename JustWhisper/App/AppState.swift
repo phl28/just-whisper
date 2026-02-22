@@ -16,9 +16,13 @@ final class AppState {
     private(set) var volatileText = ""
     var selectedLocale = Locale.current
 
+    let permissions = PermissionsManager()
+    let hotkeyManager = GlobalHotkeyManager()
+
     private let audioService = AudioCaptureService()
+    private let textInserter = TextInsertionService()
     private var engine: (any TranscriptionEngine)?
-    private var transcriptionTask: Task<Void, Never>?
+    private var session: TranscriptionSession?
 
     var isTranscribing: Bool {
         switch status {
@@ -30,6 +34,30 @@ final class AppState {
     init() {
         if #available(macOS 26.0, *) {
             engine = AppleSpeechEngine()
+        }
+
+        hotkeyManager.onActivate = { [weak self] in
+            self?.toggleTranscription()
+        }
+        hotkeyManager.onDeactivate = { [weak self] in
+            if self?.hotkeyManager.mode == .holdToTalk {
+                self?.stopTranscription()
+            }
+        }
+    }
+
+    func setup() {
+        permissions.checkAll()
+        if permissions.accessibilityGranted {
+            hotkeyManager.register()
+        }
+    }
+
+    func toggleTranscription() {
+        if isTranscribing {
+            stopTranscription()
+        } else {
+            startTranscription()
         }
     }
 
@@ -44,47 +72,32 @@ final class AppState {
         volatileText = ""
         status = .listening
 
-        transcriptionTask = Task {
-            let granted = await audioService.requestPermission()
-            guard granted else {
-                status = .error("Microphone permission denied")
-                return
-            }
+        let session = TranscriptionSession(
+            audioService: audioService,
+            engine: engine,
+            textInserter: textInserter,
+            locale: selectedLocale
+        )
+        session.onUpdate = { [weak self] finalized, volatile in
+            self?.finalizedText = finalized
+            self?.volatileText = volatile
+        }
+        self.session = session
 
-            let audioStream = audioService.startCapture()
-            let resultStream = engine.startTranscription(
-                audioStream: audioStream,
-                locale: selectedLocale
-            )
-
+        Task {
             do {
-                for try await result in resultStream {
-                    if result.isFinal {
-                        finalizedText += result.text
-                        volatileText = ""
-                        Logger.transcription.debug("Final: \(result.text)")
-                    } else {
-                        volatileText = result.text
-                        Logger.transcription.debug("Volatile: \(result.text)")
-                    }
-                }
+                try await session.start()
                 status = .idle
             } catch {
-                Logger.transcription.error("Transcription failed: \(error)")
+                Logger.transcription.error("Failed to start: \(error)")
                 status = .error(error.localizedDescription)
             }
         }
     }
 
     func stopTranscription() {
-        audioService.stopCapture()
-
-        Task {
-            await engine?.stopTranscription()
-        }
-
-        transcriptionTask?.cancel()
-        transcriptionTask = nil
+        session?.stop()
+        session = nil
         volatileText = ""
         status = .idle
     }
