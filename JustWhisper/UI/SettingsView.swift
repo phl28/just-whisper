@@ -46,6 +46,14 @@ struct SettingsView: View {
                 Picker("Language", selection: $appState.selectedLocale) {
                     Text("System Default (\(Locale.current.localizedString(forIdentifier: Locale.current.identifier) ?? "Unknown"))")
                         .tag(Locale.current)
+
+                    if !appState.availableLocales.isEmpty {
+                        Divider()
+                        ForEach(appState.availableLocales, id: \.identifier) { locale in
+                            Text(locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
+                                .tag(locale)
+                        }
+                    }
                 }
 
                 Toggle("Show floating overlay", isOn: $showOverlay)
@@ -146,6 +154,47 @@ struct SettingsView: View {
                     appState.deviceManager.refreshDevices()
                 }
             }
+
+            Section("Level") {
+                AudioLevelView(level: appState.audioService.currentLevel)
+                    .frame(height: 20)
+
+                Text(appState.audioService.isCapturing ? "Monitoring active" : "Start transcription to see levels")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+    }
+}
+
+struct AudioLevelView: View {
+    let level: Float
+
+    private var normalizedLevel: CGFloat {
+        let clamped = max(min(CGFloat(level), 0), -60)
+        return (clamped + 60) / 60
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.quaternary)
+
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(levelColor)
+                    .frame(width: geometry.size.width * normalizedLevel)
+                    .animation(.linear(duration: 0.1), value: normalizedLevel)
+            }
+        }
+    }
+
+    private var levelColor: Color {
+        if normalizedLevel > 0.8 {
+            return .red
+        } else if normalizedLevel > 0.5 {
+            return .yellow
+        }
+        return .green
     }
 }

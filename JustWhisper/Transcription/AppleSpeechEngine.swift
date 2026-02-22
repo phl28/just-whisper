@@ -20,13 +20,36 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
         get async { await DictationTranscriber.supportedLocales }
     }
 
+    func preferredAudioFormat(for locale: Locale) async -> AVAudioFormat? {
+        let transcriber = DictationTranscriber(
+            locale: locale,
+            preset: .progressiveShortDictation
+        )
+        let detector = SpeechDetector()
+        return await SpeechAnalyzer.bestAvailableAudioFormat(
+            compatibleWith: [transcriber, detector]
+        )
+    }
+
     func prepareModel(for locale: Locale) async {
         let transcriber = DictationTranscriber(
             locale: locale,
             preset: .progressiveShortDictation
         )
+        let detector = SpeechDetector()
         do {
             try await ensureModelAvailable(for: transcriber)
+
+            let options = SpeechAnalyzer.Options(
+                priority: .userInitiated,
+                modelRetention: .whileInUse
+            )
+            let analyzer = SpeechAnalyzer(modules: [transcriber, detector], options: options)
+            let preferredFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
+                compatibleWith: [transcriber, detector]
+            )
+            try await analyzer.prepareToAnalyze(in: preferredFormat)
+            await analyzer.cancelAndFinishNow()
             Logger.transcription.info("Apple speech model pre-warmed for \(locale.identifier)")
         } catch {
             Logger.transcription.error("Pre-warm failed: \(error)")
@@ -72,10 +95,7 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
 
                         group.addTask {
                             do {
-                                var lastResultTime = Date()
-
                                 for try await result in transcriber.results {
-                                    lastResultTime = Date()
                                     let text = String(result.text.characters)
                                     continuation.yield(TranscriptionResult(
                                         text: text,
@@ -84,7 +104,6 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
                                     ))
                                 }
 
-                                _ = lastResultTime
                                 continuation.finish()
                             } catch {
                                 Logger.transcription.error("Transcription error: \(error)")
@@ -167,6 +186,7 @@ enum TranscriptionError: LocalizedError {
     case engineUnavailable
     case permissionDenied
     case audioDeviceNotFound
+    case audioDeviceDisconnected
     case engineFailed(underlying: Error)
 
     var errorDescription: String? {
@@ -175,6 +195,7 @@ enum TranscriptionError: LocalizedError {
         case .engineUnavailable: "No transcription engine is available."
         case .permissionDenied: "Speech recognition permission was denied."
         case .audioDeviceNotFound: "The selected audio device could not be found."
+        case .audioDeviceDisconnected: "The audio device was disconnected."
         case .engineFailed(let error): "Transcription failed: \(error.localizedDescription)"
         }
     }

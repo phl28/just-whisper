@@ -44,7 +44,8 @@ final class TranscriptionSession {
             throw TranscriptionError.permissionDenied
         }
 
-        let audioStream = audioService.startCapture()
+        let preferredFormat = await engine.preferredAudioFormat(for: locale)
+        let audioStream = audioService.startCapture(format: preferredFormat)
         let resultStream = engine.startTranscription(
             audioStream: audioStream,
             locale: locale

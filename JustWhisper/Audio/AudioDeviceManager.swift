@@ -18,6 +18,8 @@ final class AudioDeviceManager {
         }
     }
 
+    var onSelectedDeviceDisconnected: (() -> Void)?
+
     private var listenerBlock: AudioObjectPropertyListenerBlock?
 
     init() {
@@ -27,8 +29,16 @@ final class AudioDeviceManager {
     }
 
     func refreshDevices() {
+        let previousSelectedUID = selectedDeviceUID
         inputDevices = Self.enumerateInputDevices()
         Logger.audio.info("Found \(self.inputDevices.count) input devices")
+
+        if let uid = previousSelectedUID,
+           !uid.isEmpty,
+           !inputDevices.contains(where: { $0.uid == uid }) {
+            Logger.audio.warning("Selected device '\(uid)' disconnected")
+            onSelectedDeviceDisconnected?()
+        }
     }
 
     var selectedDevice: AudioDevice? {

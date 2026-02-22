@@ -17,14 +17,15 @@ final class AppState {
     private(set) var volatileText = ""
     private(set) var isSpeechDetected = false
     private(set) var activeEngineName = ""
+    private(set) var availableLocales: [Locale] = []
     var selectedLocale = Locale(identifier: UserDefaults.standard.selectedLocaleIdentifier)
 
     let permissions = PermissionsManager()
     let hotkeyManager = GlobalHotkeyManager()
     let deviceManager = AudioDeviceManager()
     let overlay = TranscriptionOverlayWindow()
+    let audioService = AudioCaptureService()
 
-    private let audioService = AudioCaptureService()
     private let textInserter = TextInsertionService()
     private var appleEngine: (any TranscriptionEngine)?
     #if canImport(WhisperKit)
@@ -32,6 +33,8 @@ final class AppState {
     #endif
     private var session: TranscriptionSession?
     private let settingsController = SettingsWindowController()
+    private var appleSupportedLocales: [Locale] = []
+    private var appleRetryUsed = false
 
     var isTranscribing: Bool {
         switch status {
@@ -64,6 +67,13 @@ final class AppState {
                 self?.stopTranscription()
             }
         }
+
+        deviceManager.onSelectedDeviceDisconnected = { [weak self] in
+            guard let self, self.isTranscribing else { return }
+            Logger.audio.warning("Audio device disconnected during transcription")
+            self.stopTranscription()
+            self.status = .error("Audio device disconnected")
+        }
     }
 
     func setup() {
@@ -73,6 +83,7 @@ final class AppState {
         }
 
         Task {
+            await loadSupportedLocales()
             await prewarmEngines()
         }
     }
@@ -94,6 +105,7 @@ final class AppState {
             return
         }
 
+        appleRetryUsed = false
         finalizedText = ""
         volatileText = ""
         isSpeechDetected = false
@@ -104,38 +116,7 @@ final class AppState {
         }
 
         configureSpeechDetection(engine: engine)
-
-        let shouldAutoInsert = UserDefaults.standard.autoInsert
-        let silenceTimeout = UserDefaults.standard.silenceTimeoutSeconds
-        let session = TranscriptionSession(
-            audioService: audioService,
-            engine: engine,
-            textInserter: shouldAutoInsert ? textInserter : nil,
-            locale: selectedLocale,
-            silenceTimeout: silenceTimeout
-        )
-        session.onUpdate = { [weak self] finalized, volatile in
-            self?.finalizedText = finalized
-            self?.volatileText = volatile
-        }
-        session.onSilenceTimeout = { [weak self] in
-            self?.stopTranscription()
-        }
-        self.session = session
-
-        Task {
-            do {
-                try await session.start()
-                status = .idle
-                overlay.hideAfterDelay()
-            } catch let error as TranscriptionError {
-                handleTranscriptionError(error, originalEngine: engine)
-            } catch {
-                Logger.transcription.error("Failed to start: \(error)")
-                status = .error(error.localizedDescription)
-                overlay.hideAfterDelay()
-            }
-        }
+        startSessionWith(engine: engine)
     }
 
     func stopTranscription() {
@@ -179,6 +160,8 @@ final class AppState {
         #endif
     }
 
+    // MARK: - Engine Selection
+
     private func resolveEngine() -> (any TranscriptionEngine)? {
         let preference = UserDefaults.standard.enginePreference
 
@@ -209,14 +192,28 @@ final class AppState {
     }
 
     private func autoSelectEngine() -> (any TranscriptionEngine)? {
-        if let apple = appleEngine {
+        let localeSupported = appleSupportedLocales.contains { locale in
+            locale.language.languageCode == selectedLocale.language.languageCode
+        }
+
+        if let apple = appleEngine, localeSupported {
             activeEngineName = "Apple Speech"
             return apple
+        }
+
+        if !localeSupported, let apple = appleEngine {
+            Logger.transcription.info("Locale '\(self.selectedLocale.identifier)' not in Apple's supported list, checking WhisperKit")
         }
 
         if let whisper = whisperKitFallback() {
             activeEngineName = "WhisperKit"
             return whisper
+        }
+
+        if let apple = appleEngine {
+            activeEngineName = "Apple Speech"
+            Logger.transcription.info("Falling back to Apple engine despite locale mismatch")
+            return apple
         }
 
         return nil
@@ -242,33 +239,9 @@ final class AppState {
         #endif
     }
 
-    private func configureSpeechDetection(engine: any TranscriptionEngine) {
-        if #available(macOS 26.0, *), let appleEngine = engine as? AppleSpeechEngine {
-            appleEngine.onSpeechDetection = { [weak self] detected in
-                Task { @MainActor in
-                    self?.isSpeechDetected = detected
-                }
-            }
-        }
-    }
+    // MARK: - Session Management
 
-    private func handleTranscriptionError(_ error: TranscriptionError, originalEngine: any TranscriptionEngine) {
-        Logger.transcription.error("Transcription error: \(error.localizedDescription)")
-
-        #if canImport(WhisperKit)
-        if !(originalEngine is WhisperKitEngine), let fallback = whisperEngine {
-            Logger.transcription.info("Falling back to WhisperKit after Apple engine failure")
-            activeEngineName = "WhisperKit (fallback)"
-            retryWithEngine(fallback)
-            return
-        }
-        #endif
-
-        status = .error(error.localizedDescription)
-        overlay.hideAfterDelay()
-    }
-
-    private func retryWithEngine(_ engine: any TranscriptionEngine) {
+    private func startSessionWith(engine: any TranscriptionEngine) {
         let shouldAutoInsert = UserDefaults.standard.autoInsert
         let silenceTimeout = UserDefaults.standard.silenceTimeoutSeconds
         let session = TranscriptionSession(
@@ -292,12 +265,79 @@ final class AppState {
                 try await session.start()
                 status = .idle
                 overlay.hideAfterDelay()
+            } catch let error as TranscriptionError {
+                handleTranscriptionError(error, originalEngine: engine)
             } catch {
-                Logger.transcription.error("Fallback engine also failed: \(error)")
+                Logger.transcription.error("Failed to start: \(error)")
                 status = .error(error.localizedDescription)
                 overlay.hideAfterDelay()
             }
         }
+    }
+
+    private func configureSpeechDetection(engine: any TranscriptionEngine) {
+        if #available(macOS 26.0, *), let appleEngine = engine as? AppleSpeechEngine {
+            appleEngine.onSpeechDetection = { [weak self] detected in
+                Task { @MainActor in
+                    self?.isSpeechDetected = detected
+                }
+            }
+        }
+    }
+
+    private func handleTranscriptionError(_ error: TranscriptionError, originalEngine: any TranscriptionEngine) {
+        Logger.transcription.error("Transcription error: \(error.localizedDescription)")
+
+        session?.stop()
+        session = nil
+
+        if #available(macOS 26.0, *),
+           originalEngine is AppleSpeechEngine,
+           !appleRetryUsed,
+           let apple = appleEngine {
+            appleRetryUsed = true
+            Logger.transcription.info("Retrying with Apple engine (attempt 2)")
+            activeEngineName = "Apple Speech (retry)"
+            startSessionWith(engine: apple)
+            return
+        }
+
+        #if canImport(WhisperKit)
+        if !(originalEngine is WhisperKitEngine), let fallback = whisperEngine {
+            Logger.transcription.info("Falling back to WhisperKit after Apple engine failure")
+            activeEngineName = "WhisperKit (fallback)"
+            startSessionWith(engine: fallback)
+            return
+        }
+        #endif
+
+        status = .error(error.localizedDescription)
+        overlay.hideAfterDelay()
+    }
+
+    // MARK: - Locale & Pre-warming
+
+    private func loadSupportedLocales() async {
+        var locales: Set<String> = []
+
+        if let apple = appleEngine {
+            let appleLocales = await apple.supportedLocales
+            appleSupportedLocales = appleLocales
+            for locale in appleLocales {
+                locales.insert(locale.identifier)
+            }
+        }
+
+        #if canImport(WhisperKit)
+        if let whisper = whisperEngine {
+            let whisperLocales = await whisper.supportedLocales
+            for locale in whisperLocales {
+                locales.insert(locale.identifier)
+            }
+        }
+        #endif
+
+        availableLocales = locales.sorted().map { Locale(identifier: $0) }
     }
 
     private func prewarmEngines() async {
