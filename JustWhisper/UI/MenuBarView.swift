@@ -42,11 +42,18 @@ struct MenuBarView: View {
 
             Divider()
 
+            inputDeviceMenu
+
             hotkeySection
 
             Divider()
 
-            Button("Quit") {
+            Button("Settings...") {
+                appState.showSettings()
+            }
+            .keyboardShortcut(",")
+
+            Button("Quit Just Whisper") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q")
@@ -90,6 +97,22 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder
+    private var inputDeviceMenu: some View {
+        Menu("Microphone: \(appState.deviceManager.selectedDevice?.name ?? "Default")") {
+            Button("System Default") {
+                appState.deviceManager.selectedDeviceUID = nil
+            }
+            Divider()
+            ForEach(appState.deviceManager.inputDevices) { device in
+                Button(device.name) {
+                    appState.deviceManager.selectedDeviceUID = device.uid
+                }
+            }
+        }
+        .font(.caption)
+    }
+
+    @ViewBuilder
     private var hotkeySection: some View {
         HStack {
             Text("Hotkey: Double-tap ⌥")
@@ -98,7 +121,10 @@ struct MenuBarView: View {
             Spacer()
             Picker("", selection: Binding(
                 get: { appState.hotkeyManager.mode },
-                set: { appState.hotkeyManager.mode = $0 }
+                set: {
+                    appState.hotkeyManager.mode = $0
+                    UserDefaults.standard.hotkeyMode = $0.rawValue
+                }
             )) {
                 Text("Toggle").tag(GlobalHotkeyManager.Mode.toggle)
                 Text("Hold").tag(GlobalHotkeyManager.Mode.holdToTalk)

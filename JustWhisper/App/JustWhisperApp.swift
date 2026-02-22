@@ -11,8 +11,17 @@ struct JustWhisperApp: App {
             Label {
                 Text("Just Whisper")
             } icon: {
-                Image(systemName: appState.isTranscribing ? "waveform" : "mic")
+                Image(systemName: menuBarIcon)
             }
+        }
+    }
+
+    private var menuBarIcon: String {
+        switch appState.status {
+        case .listening: "waveform"
+        case .processing: "ellipsis.circle"
+        case .error: "exclamationmark.triangle"
+        case .idle: "mic"
         }
     }
 }

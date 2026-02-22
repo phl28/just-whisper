@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 import OSLog
 
 @Observable
@@ -14,15 +15,18 @@ final class AppState {
     private(set) var status: Status = .idle
     private(set) var finalizedText = ""
     private(set) var volatileText = ""
-    var selectedLocale = Locale.current
+    var selectedLocale = Locale(identifier: UserDefaults.standard.selectedLocaleIdentifier)
 
     let permissions = PermissionsManager()
     let hotkeyManager = GlobalHotkeyManager()
+    let deviceManager = AudioDeviceManager()
+    let overlay = TranscriptionOverlayWindow()
 
     private let audioService = AudioCaptureService()
     private let textInserter = TextInsertionService()
     private var engine: (any TranscriptionEngine)?
     private var session: TranscriptionSession?
+    private let settingsController = SettingsWindowController()
 
     var isTranscribing: Bool {
         switch status {
@@ -34,6 +38,11 @@ final class AppState {
     init() {
         if #available(macOS 26.0, *) {
             engine = AppleSpeechEngine()
+        }
+
+        if let modeRaw = UserDefaults.standard.string(forKey: Defaults.hotkeyMode),
+           let mode = GlobalHotkeyManager.Mode(rawValue: modeRaw) {
+            hotkeyManager.mode = mode
         }
 
         hotkeyManager.onActivate = { [weak self] in
@@ -72,10 +81,15 @@ final class AppState {
         volatileText = ""
         status = .listening
 
+        if UserDefaults.standard.showOverlay {
+            overlay.show(appState: self)
+        }
+
+        let shouldAutoInsert = UserDefaults.standard.autoInsert
         let session = TranscriptionSession(
             audioService: audioService,
             engine: engine,
-            textInserter: textInserter,
+            textInserter: shouldAutoInsert ? textInserter : nil,
             locale: selectedLocale
         )
         session.onUpdate = { [weak self] finalized, volatile in
@@ -88,6 +102,7 @@ final class AppState {
             do {
                 try await session.start()
                 status = .idle
+                overlay.hideAfterDelay()
             } catch {
                 Logger.transcription.error("Failed to start: \(error)")
                 status = .error(error.localizedDescription)
@@ -100,6 +115,23 @@ final class AppState {
         session = nil
         volatileText = ""
         status = .idle
+        overlay.hideAfterDelay()
+    }
+
+    func showSettings() {
+        settingsController.show(appState: self)
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            Logger.ui.error("Failed to set launch at login: \(error)")
+        }
     }
 
     var displayText: String {

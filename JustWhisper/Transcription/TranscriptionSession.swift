@@ -5,7 +5,7 @@ import OSLog
 final class TranscriptionSession {
     private let audioService: AudioCaptureService
     private let engine: any TranscriptionEngine
-    private let textInserter: TextInsertionService
+    private let textInserter: TextInsertionService?
     private let locale: Locale
 
     private var transcriptionTask: Task<Void, Never>?
@@ -18,7 +18,7 @@ final class TranscriptionSession {
     init(
         audioService: AudioCaptureService,
         engine: any TranscriptionEngine,
-        textInserter: TextInsertionService,
+        textInserter: TextInsertionService?,
         locale: Locale
     ) {
         self.audioService = audioService
@@ -56,7 +56,7 @@ final class TranscriptionSession {
 
                         let newText = String(finalizedText.dropFirst(lastInsertedLength))
                         if !newText.isEmpty {
-                            textInserter.insertText(newText)
+                            textInserter?.insertText(newText)
                             lastInsertedLength = finalizedText.count
                         }
 
