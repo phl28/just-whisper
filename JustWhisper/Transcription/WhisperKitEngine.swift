@@ -31,6 +31,15 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         Logger.transcription.info("WhisperKit model loaded")
     }
 
+    func prewarmModel() async {
+        do {
+            try await loadModel()
+            Logger.transcription.info("WhisperKit model pre-warmed")
+        } catch {
+            Logger.transcription.error("WhisperKit pre-warm failed: \(error)")
+        }
+    }
+
     func startTranscription(
         audioStream: AsyncStream<AVAudioPCMBuffer>,
         locale: Locale

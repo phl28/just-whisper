@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(Defaults.autoInsert) private var autoInsert = true
     @AppStorage(Defaults.launchAtLogin) private var launchAtLogin = false
     @AppStorage(Defaults.enginePreference) private var enginePreference = EnginePreference.auto.rawValue
+    @AppStorage(Defaults.whisperKitModel) private var whisperKitModel = "base"
 
     var body: some View {
         TabView {
@@ -18,7 +19,7 @@ struct SettingsView: View {
                 .tabItem { Label("Audio", systemImage: "mic") }
         }
         .padding(20)
-        .frame(width: 460, height: 380)
+        .frame(width: 460, height: 440)
     }
 
     @ViewBuilder
@@ -38,6 +39,16 @@ struct SettingsView: View {
                         Text("Active engine:")
                         Text(appState.activeEngineName)
                             .foregroundStyle(.secondary)
+                    }
+                }
+
+                if appState.isWhisperKitAvailable {
+                    Picker("WhisperKit model", selection: $whisperKitModel) {
+                        Text("Tiny (fastest)").tag("tiny")
+                        Text("Base (balanced)").tag("base")
+                        Text("Small").tag("small")
+                        Text("Medium").tag("medium")
+                        Text("Large v3 (best quality)").tag("large-v3")
                     }
                 }
             }
@@ -96,6 +107,22 @@ struct SettingsView: View {
                     if !appState.permissions.accessibilityGranted {
                         Button("Open Settings") {
                             appState.permissions.openAccessibilitySettings()
+                        }
+                    }
+                }
+
+                HStack {
+                    Label(
+                        appState.permissions.speechRecognitionGranted ? "Speech Recognition: Granted" : "Speech Recognition: Not Granted",
+                        systemImage: appState.permissions.speechRecognitionGranted ? "checkmark.circle.fill" : "xmark.circle.fill"
+                    )
+                    .foregroundStyle(appState.permissions.speechRecognitionGranted ? .green : .red)
+
+                    Spacer()
+
+                    if !appState.permissions.speechRecognitionGranted {
+                        Button("Open Settings") {
+                            appState.permissions.openSpeechRecognitionSettings()
                         }
                     }
                 }

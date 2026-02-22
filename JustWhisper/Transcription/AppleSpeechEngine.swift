@@ -9,7 +9,6 @@ final class AppleSpeechEngine: TranscriptionEngine, @unchecked Sendable {
     private var detector: SpeechDetector?
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
 
-    var silenceTimeoutSeconds: TimeInterval = 30
     var onSpeechDetection: ((Bool) -> Void)?
 
     var isAvailable: Bool {

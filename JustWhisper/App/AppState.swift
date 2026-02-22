@@ -291,6 +291,13 @@ final class AppState {
         session?.stop()
         session = nil
 
+        if case .permissionDenied = error {
+            permissions.openMicrophoneSettings()
+            status = .error("Microphone permission denied — opening Settings…")
+            overlay.hideAfterDelay()
+            return
+        }
+
         if #available(macOS 26.0, *),
            originalEngine is AppleSpeechEngine,
            !appleRetryUsed,
@@ -341,8 +348,16 @@ final class AppState {
     }
 
     private func prewarmEngines() async {
+        let preference = UserDefaults.standard.enginePreference
+
         if #available(macOS 26.0, *), let apple = appleEngine as? AppleSpeechEngine {
             await apple.prepareModel(for: selectedLocale)
         }
+
+        #if canImport(WhisperKit)
+        if preference == .whisperKit || preference == .auto {
+            await whisperEngine?.prewarmModel()
+        }
+        #endif
     }
 }

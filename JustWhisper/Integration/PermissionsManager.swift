@@ -1,5 +1,6 @@
 import AppKit
 @preconcurrency import AVFoundation
+import Speech
 import OSLog
 
 @Observable
@@ -7,10 +8,12 @@ import OSLog
 final class PermissionsManager {
     private(set) var microphoneGranted = false
     private(set) var accessibilityGranted = false
+    private(set) var speechRecognitionGranted = false
 
     func checkAll() {
         checkMicrophone()
         checkAccessibility()
+        checkSpeechRecognition()
     }
 
     func checkMicrophone() {
@@ -44,6 +47,25 @@ final class PermissionsManager {
         accessibilityGranted = AXIsProcessTrustedWithOptions(options)
     }
 
+    func checkSpeechRecognition() {
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized:
+            speechRecognitionGranted = true
+        case .denied, .restricted, .notDetermined:
+            speechRecognitionGranted = false
+        @unknown default:
+            speechRecognitionGranted = false
+        }
+    }
+
+    func requestSpeechRecognition() {
+        SFSpeechRecognizer.requestAuthorization { [weak self] status in
+            Task { @MainActor in
+                self?.speechRecognitionGranted = (status == .authorized)
+            }
+        }
+    }
+
     func openAccessibilitySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
@@ -56,7 +78,13 @@ final class PermissionsManager {
         }
     }
 
+    func openSpeechRecognitionSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     var allGranted: Bool {
-        microphoneGranted && accessibilityGranted
+        microphoneGranted && accessibilityGranted && speechRecognitionGranted
     }
 }
